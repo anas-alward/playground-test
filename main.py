@@ -1,10 +1,16 @@
 import os
+import uuid
+
 import pandas as pd
 
 
+def generate_seller_sku():
+    return f"SKU-{uuid.uuid4().hex[:12].upper()}"
+
+
 def main():
-    # Iterate through folders in packages
     packages_dir = "/home/anas/Dev/playground/pandas/product_upload/packages"
+
     subdirs = sorted(
         [
             d
@@ -20,25 +26,30 @@ def main():
             print(f"Processing {file_path}...")
 
             try:
-                # Read the excel file
-                df = pd.read_excel(file_path)
-
-                # Create barcode column from ID column
-                id_col = next(
-                    (col for col in df.columns if str(col).strip().lower() == "id"),
-                    None,
+                # Read all sheets
+                sheets = pd.read_excel(
+                    file_path,
+                    sheet_name=None,
                 )
 
-                if id_col:
-                    df["barcode"] = df[id_col]
-                    print("  Created barcode column from ID")
-                else:
-                    print("  ID column not found, barcode column not created")
+                for sheet_name, df in sheets.items():
+                    sheets[sheet_name] = df.loc[:, ~df.columns.str.contains(r"^Unnamed")]
 
-                # Write back to the same path
-                df.to_excel(file_path, sheet_name="Drugs", index=False)
+                                # Add Seller SKU column to drugs sheet
+                    
+                # Write workbook back
+                with pd.ExcelWriter(
+                    file_path,
+                    engine="openpyxl",
+                ) as writer:
+                    for sheet_name, df in sheets.items():
+                        df.to_excel(
+                            writer,
+                            sheet_name=sheet_name,
+                            index=False,
+                        )
 
-                print(f"  Successfully updated {file_path}")
+                print("  Done")
 
             except Exception as e:
                 print(f"  Error processing {file_path}: {e}")
