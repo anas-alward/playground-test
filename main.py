@@ -1,58 +1,50 @@
 import os
-import uuid
-
 import pandas as pd
-
-
-def generate_seller_sku():
-    return f"SKU-{uuid.uuid4().hex[:12].upper()}"
 
 
 def main():
     packages_dir = "/home/anas/Dev/playground/pandas/product_upload/packages"
 
     subdirs = sorted(
-        [
-            d
-            for d in os.listdir(packages_dir)
-            if os.path.isdir(os.path.join(packages_dir, d))
-        ]
+        d
+        for d in os.listdir(packages_dir)
+        if os.path.isdir(os.path.join(packages_dir, d))
     )
 
     for subdir in subdirs:
         file_path = os.path.join(packages_dir, subdir, "file.xlsx")
 
-        if os.path.exists(file_path):
-            print(f"Processing {file_path}...")
+        if not os.path.exists(file_path):
+            continue
 
-            try:
-                # Read all sheets
-                sheets = pd.read_excel(
-                    file_path,
-                    sheet_name=None,
-                )
+        try:
+            sheets = pd.read_excel(file_path, sheet_name=None, engine="openpyxl")
+            changed = False
 
-                for sheet_name, df in sheets.items():
-                    sheets[sheet_name] = df.loc[:, ~df.columns.str.contains(r"^Unnamed")]
+            if "cosmetics" in sheets:
+                df = sheets["cosmetics"]
 
-                                # Add Seller SKU column to drugs sheet
-                    
-                # Write workbook back
-                with pd.ExcelWriter(
-                    file_path,
-                    engine="openpyxl",
-                ) as writer:
-                    for sheet_name, df in sheets.items():
-                        df.to_excel(
-                            writer,
-                            sheet_name=sheet_name,
-                            index=False,
-                        )
+                if "Ingredients" not in df.columns and "Ingredients (INCI) *" in df.columns:
+                    if "Seller SKU" in df.columns:
+                        seller_idx = df.columns.get_loc("Seller SKU")
+                        df.insert(seller_idx, "Ingredients", df["Ingredients (INCI) *"])
+                    else:
+                        df["Ingredients"] = df["Ingredients (INCI) *"]
 
-                print("  Done")
+                    sheets["cosmetics"] = df
+                    changed = True
 
-            except Exception as e:
-                print(f"  Error processing {file_path}: {e}")
+            if changed:
+                with pd.ExcelWriter(file_path, engine="openpyxl") as writer:
+                    for sheet_name, s_df in sheets.items():
+                        s_df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+                print(f"  {subdir}: Added Ingredients to cosmetics")
+
+        except Exception as e:
+            print(f"  {subdir}: Error: {e}")
+
+    print("\nDone.")
 
 
 if __name__ == "__main__":
