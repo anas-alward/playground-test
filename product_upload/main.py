@@ -1,45 +1,232 @@
-import requests
-import json
+import logging
+import pandas as pd
+from pathlib import Path
+from functools import wraps
+from typing import Callable, Any
 
-url = "http://localhost:8001/graphql/"
-file_number = 56
+logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
+log = logging.getLogger(__name__)
 
-operations = {
-    "query": """
-        mutation ProductUploadCreate($file: Upload!, $imagesZip: Upload!) {
-            vendorProductUploadCreate(file: $file, imagesZip:$imagesZip ) {
-                success
-                productUpload {
-                    id
-                    status  
-                    uploadUuid
-                    }
-                errors {
-                    field
-                    message
-                    code
-                }
-            }
-        }
-    """,
-    "variables": {"file": None, "imagesZip": None},
-}
+BASE = Path(__file__).resolve().parent / "packages"
+FOLDERS = list(range(1, 67))
+SHEET_NAMES = {"drugs": "Drugs", "devices": "devices", "cosmetics": "cosmetics"}
 
-map_ = {"0": ["variables.file"], "1": ["variables.imagesZip"]}
 
-token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImtpZCI6InNWR0Q0NzdibjRxSk43VXhaMlBNa3RIUmExWW05aEVSRXI2c3hmZTNLb3cifQ.eyJleHAiOjE3ODM5ODM3NTEsImlhdCI6MTc4MjI1NTc1MSwianRpIjoiNjY5OWFlZWUtMTNjYy00NzZhLTk0ZWItZDExZWIyOWQ4MjFiIiwiaXNzIjoiaHR0cHM6Ly9hcGkuZGV2Mi53YXNmYXR5cGx1cy5jb20vYXV0aC9yZWFsbXMvamhpcHN0ZXIiLCJzdWIiOiJmMjY0ZDY4My0xNTI1LTRjOTctOTNmNy00NTBiMWZhZDM5ZDciLCJ0eXAiOiJCZWFyZXIiLCJhenAiOiJnYXRld2F5X3dlYl9hcHAiLCJzZXNzaW9uX3N0YXRlIjoiZGI1ODY5OGMtYzI5YS00N2I5LWIwZDEtM2NkY2M1NzIzNTdiIiwiYWNyIjoiMSIsImFsbG93ZWQtb3JpZ2lucyI6WyJodHRwczovL3dlYi5zZWhhY2l0eS5pbSIsImh0dHA6Ly8xMjcuMC4wLjE6ODc2MSIsImh0dHA6Ly9rZXljbG9hazo4NzYxIiwiaHR0cDovLzMuMjM0LjE1MC43Nzo4NzYxIiwiaHR0cDovL2xvY2FsaG9zdDo4MDgxIiwiaHR0cHM6Ly9pbS5zZWhhY2l0eS5jb20iLCIqIiwiaHR0cDovL2tleWNsb2FrOjgwODEiLCJodHRwOi8vMy4yMzQuMTUwLjc3OjgwODEiLCJodHRwczovL2ltLnRlc3Quc2VoYWNpdHkuY29tIiwiaHR0cDovL2xvY2FsaG9zdDo5MDAwIiwiaHR0cDovL2xvY2FsaG9zdDo4MTAwIl0sInJlYWxtX2FjY2VzcyI6eyJyb2xlcyI6WyJkZWZhdWx0LXJvbGVzLWpoaXBzdGVyIl19LCJzY29wZSI6Im9wZW5pZCBqaGlwc3RlciBlbWFpbCBwcm9maWxlIiwic2lkIjoiZGI1ODY5OGMtYzI5YS00N2I5LWIwZDEtM2NkY2M1NzIzNTdiIiwiZW1haWxfdmVyaWZpZWQiOmZhbHNlLCJyb2xlcyI6WyJkZWZhdWx0LXJvbGVzLWpoaXBzdGVyIl0sIm5hbWUiOiJ2ZW5kb3IgYWRtaW4iLCJwcmVmZXJyZWRfdXNlcm5hbWUiOiJ2OTY2NTU4OTYzMjc4IiwiZ2l2ZW5fbmFtZSI6InZlbmRvciIsImZhbWlseV9uYW1lIjoiYWRtaW4iLCJlbWFpbCI6InZlbmRvci5hZG1pNUBnbWFpbC5jb20iLCJ1c2VyX2lkIjoyMDY4LCJwYXRpZW50X2lkIjpudWxsLCJ2ZW5kb3JfaWQiOm51bGwsInByb3ZpZGVyX2lkIjpudWxsLCJwcm92aWRlcl9jb2RlIjpudWxsLCJhcHBfdHlwZSI6IlZlbmRvciIsImFwcF9yb2xlIjoiQWRtaW4iLCJuYXRpb25hbF9pZCI6Ijk2NjU1ODk2MzI3OCIsInBlcm1pc3Npb25zIjpbIm1hbmFnZV9icmFuY2hlcyIsIm1hbmFnZV9jaGVja291dHMiLCJtYW5hZ2Vfb3JkZXJzIiwibWFuYWdlX3Byb2R1Y3Rfc3RvY2tzIiwibWFuYWdlX2Rpc2NvdW50cyIsIm1hbmFnZV91c2VycyIsInZpZXdfY3VzdG9tZXJzIiwibWFuYWdlX2NoYXQiLCJtYW5hZ2VfaW52b2ljZXMiLCJtYW5hZ2VfbWVkaWNhbF9kZWxpdmVyeV9yZXF1ZXN0cyIsIm1hbmFnZV9waGFybWFjeV9jcmVkZW50aWFscyIsIm1hbmFnZV9wcmVzY3JpcHRpb25zIl19.dmqeEEcTb-VKJOz4l8UsqPI_5zyW7wexemByn8z8aJrW9zFciZfOeVc2nEAtAnlAGx7LcFywEAv6Ss8MvPERepmRAofpbgrn3hYK4HM0yFeztyvKswu8_p-cwInIVTZZgrw1UKrCIZzRl8tYsvXbJsN_D2-3-U-SeUkpvJLvXC1i0Z7cVUkyoX2Z0X9MXdDLax178i0H4qv5A-VflK4VwT3fx8Qz6AInLU88d5VIOmr1C-DfqSQd8gsv5X8yCXySHoFvZbaquvoi6veOFiUYpnaTBn4Bs2I8ghwsLGW6sHWdkqIbMvjBOIN9Kzzs94zT53uyrzJfCE29KQIEKQVcEpFu2Sgz3dnauUjRsvVMgqU5J8OCwScgGrkqR_3eB8vkGZ5uLBYDvaRXKEltgk6r5KxANE0uwg9NbN8ah_uQjXPx2lsnx3667M6-7WNkEbTfXfBrGPjJGVJnAdZ9oYsqV8grsPYViMkCulWBDHSM7ie0PGdrRwE6FFwR96W-xp80RSqkRIKa8AigNdxi2L0SfNIMSiIuRNFR98BQqVQzHDp6md3alGX19WaDCCgyv2wX5NQi7ViAM89dXHad1cBTSbI4KhtXoigxnf_7o2WHtTBCGS7TqMMvVcEnem3kuYtYMw7kld0Vj0QoM78vXIPH4Owj84nKaGtRTlDfImYVYKc"
-headers = {
-    "Authorization": f"Bearer {token}",
-}
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-files = {
-    "operations": (None, json.dumps(operations), "application/json"),
-    "map": (None, json.dumps(map_), "application/json"),
-    "0": ("file.xlsx", open(f"./packages/{file_number}/file.xlsx", "rb")),
-    "1": ("images.zip", open(f"./packages/{file_number}/drugs.zip", "rb")),
-}
+def normalize_cols(df: pd.DataFrame) -> dict[str, str]:
+    """Return {lowercase_name: actual_column_name} for all columns in df."""
+    return {c.lower().strip(): c for c in df.columns}
 
-response = requests.post(url, files=files, headers=headers, verify=False)
 
-print(response.status_code)
-print(json.dumps(response.json(), indent=2))
+def col_lookup(df: pd.DataFrame, *candidates: str) -> str | None:
+    """Find a column by trying multiple case-insensitive names."""
+    lookup = normalize_cols(df)
+    for cand in candidates:
+        key = cand.lower().strip()
+        if key in lookup:
+            return lookup[key]
+    return None
+
+
+def is_empty(v) -> bool:
+    """Check if a value is null, empty string, or placeholder."""
+    if pd.isna(v):
+        return True
+    s = str(v).strip()
+    return s in ("", "_", "-", "None", "nan", "0")
+
+
+def ensure_str_column(df: pd.DataFrame, col: str) -> pd.DataFrame:
+    """Convert a column to string if it's numeric (e.g. all-NaN float64)."""
+    if df[col].dtype in ("float64", "int64"):
+        df = df.copy()
+        df[col] = df[col].astype(object)
+    return df
+
+
+def all_sheets(dfs: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    return dfs
+
+
+def drugs_only(dfs: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    return {k: v for k, v in dfs.items() if k == SHEET_NAMES["drugs"]}
+
+
+def devices_only(dfs: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    return {k: v for k, v in dfs.items() if k == SHEET_NAMES["devices"]}
+
+
+def cosmetics_only(dfs: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    return {k: v for k, v in dfs.items() if k == SHEET_NAMES["cosmetics"]}
+
+
+def load_one(folder: int) -> dict[str, pd.DataFrame] | None:
+    path = BASE / str(folder) / "file.xlsx"
+    try:
+        sheets = pd.read_excel(path, sheet_name=None, engine="openpyxl")
+    except Exception:
+        log.warning("Skipping folder %s - file is corrupt or unreadable", folder)
+        return None
+    return {s: sheets[s] for s in sheets}
+
+
+def save_one(folder: int, dfs: dict[str, pd.DataFrame]) -> None:
+    path = BASE / str(folder) / "file.xlsx"
+    with pd.ExcelWriter(path, engine="openpyxl") as writer:
+        for name, df in dfs.items():
+            df.to_excel(writer, sheet_name=name, index=False)
+
+
+def apply_to_all(
+    operation: Callable[[pd.DataFrame], pd.DataFrame],
+    sheet_selector: Callable = all_sheets,
+    *,
+    dry_run: bool = False,
+):
+    for folder in FOLDERS:
+        dfs = load_one(folder)
+        if dfs is None:
+            continue
+        target_sheets = sheet_selector(dfs)
+
+        for name in target_sheets:
+            dfs[name] = operation(dfs[name])
+
+        if dry_run:
+            print(f"--- Folder {folder} (dry run) ---")
+            for name in target_sheets:
+                print(f"  [{name}] {operation.__name__}")
+        else:
+            save_one(folder, dfs)
+
+    print(f"{'[DRY RUN] ' if dry_run else ''}Applied '{operation.__name__}' to {len(FOLDERS)} folders.")
+
+
+# ---------------------------------------------------------------------------
+# Bulk operations that DON'T need column-name normalization
+# (they take exact column names as parameters)
+# ---------------------------------------------------------------------------
+
+def rename_column(old: str, new: str, **kwargs):
+    def op(df): return df.rename(columns={old: new}) if old in df.columns else df
+    op.__name__ = f"rename {old!r} -> {new!r}"
+    apply_to_all(op, **kwargs)
+
+
+def update_column(col: str, value: Any, **kwargs):
+    def op(df):
+        if col in df.columns:
+            df = df.copy()
+            df[col] = value
+        return df
+    op.__name__ = f"set {col!r} = {value!r}"
+    apply_to_all(op, **kwargs)
+
+
+def update_column_where(col: str, value: Any, condition_col: str, condition_val: Any, **kwargs):
+    def op(df):
+        if col in df.columns and condition_col in df.columns:
+            df = df.copy()
+            df.loc[df[condition_col] == condition_val, col] = value
+        return df
+    op.__name__ = f"set {col!r} = {value!r} where {condition_col!r} == {condition_val!r}"
+    apply_to_all(op, **kwargs)
+
+
+def map_column(col: str, mapping: dict, **kwargs):
+    def op(df):
+        if col in df.columns:
+            df = df.copy()
+            df[col] = df[col].replace(mapping)
+        return df
+    op.__name__ = f"map {col!r}"
+    apply_to_all(op, **kwargs)
+
+
+def delete_column(col: str, **kwargs):
+    def op(df): return df.drop(columns=[col]) if col in df.columns else df
+    op.__name__ = f"delete {col!r}"
+    apply_to_all(op, **kwargs)
+
+
+def add_column(col: str, value: Any, **kwargs):
+    def op(df):
+        if col not in df.columns:
+            df = df.copy()
+            df[col] = value
+        return df
+    op.__name__ = f"add {col!r} = {value!r}"
+    apply_to_all(op, **kwargs)
+
+
+def apply_to_column(col: str, func: Callable, **kwargs):
+    def op(df):
+        if col in df.columns:
+            df = df.copy()
+            df[col] = df[col].apply(func)
+        return df
+    op.__name__ = f"apply func to {col!r}"
+    apply_to_all(op, **kwargs)
+
+
+def strip_all_strings(**kwargs):
+    def op(df):
+        df = df.copy()
+        for c in df.columns:
+            if df[c].dtype == object:
+                df[c] = df[c].astype(str).str.strip()
+        return df
+    op.__name__ = "strip all strings"
+    apply_to_all(op, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Domain-specific bulk operations
+# ---------------------------------------------------------------------------
+
+def fill_drug_descriptions(*, dry_run: bool = False):
+    """
+    Fill empty Description / En * and Description / Ar * in the Drugs sheet
+    across ALL folders. Uses product names to generate fake descriptions.
+    Handles column-name variants (case differences) and dtype issues
+    (float64 columns from all-NaN).
+    """
+
+    def op(df: pd.DataFrame) -> pd.DataFrame:
+        col_en_name = col_lookup(df, "Name / En", "name")
+        col_ar_name = col_lookup(df, "Name / Ar", "name / ar")
+
+        # Resolve description columns exactly as they appear in each file
+        lookup = normalize_cols(df)
+        col_en_desc = lookup.get("description / en *")
+        col_ar_desc = lookup.get("description / ar*")
+
+        if col_en_desc is None and col_ar_desc is None:
+            return df
+
+        df = df.copy()
+
+        # Fix dtype: columns that are all-NaN get read as float64
+        if col_en_desc:
+            df = ensure_str_column(df, col_en_desc)
+        if col_ar_desc:
+            df = ensure_str_column(df, col_ar_desc)
+
+        for idx in df.index:
+            if col_en_desc and is_empty(df.at[idx, col_en_desc]):
+                raw_name = df.at[idx, col_en_name] if col_en_name else None
+                base = str(raw_name).strip() if not is_empty(raw_name) else "Product"
+                df.at[idx, col_en_desc] = f"{base} detailed description."
+
+            if col_ar_desc and is_empty(df.at[idx, col_ar_desc]):
+                raw_name = df.at[idx, col_ar_name] if col_ar_name else None
+                base = str(raw_name).strip() if not is_empty(raw_name) else "المنتج"
+                df.at[idx, col_ar_desc] = f"وصف تفصيلي لـ {base}"
+
+        return df
+
+    op.__name__ = "fill drug descriptions"
+    apply_to_all(op, sheet_selector=drugs_only, dry_run=dry_run)
