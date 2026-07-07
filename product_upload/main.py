@@ -230,3 +230,56 @@ def fill_drug_descriptions(*, dry_run: bool = False):
 
     op.__name__ = "fill drug descriptions"
     apply_to_all(op, sheet_selector=drugs_only, dry_run=dry_run)
+
+
+def fill_size_unit(*, dry_run: bool = False):
+    """
+    Ensure 'Size Unit' is present and filled in both Drugs and Cosmetics sheets.
+    - Drugs: fill empty/0 'Size Unit' values using Strength Unit as reference
+    - Cosmetics: add 'Size Unit' column if missing, fill all with 'ml'
+    """
+
+    def op_drugs(df: pd.DataFrame) -> pd.DataFrame:
+        col_sz = col_lookup(df, "Size Unit")
+        if col_sz is None:
+            return df
+        str_unit = col_lookup(df, "Strength Unit")
+        df = ensure_str_column(df, col_sz)
+        df = df.copy()
+        for idx in df.index:
+            if is_empty(df.at[idx, col_sz]):
+                ref = str(df.at[idx, str_unit]).strip().lower() if str_unit and not is_empty(df.at[idx, str_unit]) else ""
+                if "ml" in ref:
+                    df.at[idx, col_sz] = "ml"
+                elif "%" in ref or "iu" in ref:
+                    df.at[idx, col_sz] = ref
+                else:
+                    df.at[idx, col_sz] = "mg"
+        return df
+
+    op_drugs.__name__ = "fill Size Unit (Drugs)"
+    apply_to_all(op_drugs, sheet_selector=drugs_only, dry_run=dry_run)
+
+    def op_cosmetics(df: pd.DataFrame) -> pd.DataFrame:
+        col_sz = col_lookup(df, "Size unit", "Size Unit")
+        if col_sz is None:
+            # Need to add the column — use the exact case from existing data
+            df = df.copy()
+            # Find position: after 'Size *' if it exists
+            sz_star = col_lookup(df, "Size *")
+            if sz_star:
+                pos = df.columns.get_loc(sz_star) + 1
+                df.insert(pos, "Size unit", "ml")
+            else:
+                df["Size unit"] = "ml"
+            return df
+        else:
+            df = ensure_str_column(df, col_sz)
+            df = df.copy()
+            for idx in df.index:
+                if is_empty(df.at[idx, col_sz]):
+                    df.at[idx, col_sz] = "ml"
+            return df
+
+    op_cosmetics.__name__ = "fill Size Unit (Cosmetics)"
+    apply_to_all(op_cosmetics, sheet_selector=cosmetics_only, dry_run=dry_run)
